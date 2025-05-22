@@ -1,4 +1,4 @@
-console.log("Content script lorded. this extension is made by Usuiensan with ChatGPT.ChatGPT naito kore tukurenakattayo.");
+console.log("条文番号の変換を開始します。");
   var replaceMap = {
     "第一条": "第1条",
     "第二条": "第2条",
@@ -1076,4 +1076,4 @@ console.log("Content script lorded. this extension is made by Usuiensan with Cha
     replaceText(document.body);
   };
 
-  window.setTimeout(riplaceBody, 300);
+  window.setTimeout(riplaceBody, 5000);
