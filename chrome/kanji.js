@@ -9,8 +9,30 @@ const UNIT_MAP = {
     '十': 10, '百': 100, '千': 1000
 };
 
-// 漢数字判定用セット（判定を高速化するため）
+// 漢数字判定用セット
 const KANJI_SET = new Set([...Object.keys(KANJI_MAP), ...Object.keys(UNIT_MAP)]);
+
+// 単位変換用定義
+const UNIT_PREFIXES = {
+    'ギガ': 'G', 'メガ': 'M', 'キロ': 'k', 'センチ': 'c', 'ミリ': 'm'
+};
+
+const UNIT_BASES = {
+    'メートル': 'm', 'グラム': 'g', 'トン': 't', 'リットル': 'L',
+    'ニュートン': 'N', 'ジュール': 'J', 'ワット': 'W', 
+    'パーセント': '%', 'パスカル': 'Pa'
+};
+
+const UNIT_MODIFIERS = {
+    '平方': '²', '立方': '³'
+};
+
+// そのまま変換する例外や短縮形のマッピング
+// const UNIT_SPECIAL_MAP = {
+//     'キロ': 'km',   // 文脈によるが道路関連ではkmが多いため
+//     'センチ': 'cm',
+//     'ミリ': 'mm'
+// };
 
 // 漢数字文字列を算用数字(String)に変換する関数
 function parseKanjiNumber(str) {
@@ -61,49 +83,94 @@ function parseDecimalPart(str) {
     return res;
 }
 
+// 単位文字列を記号に変換する関数
+// 例: "キロメートル" -> "km", "平方メートル" -> "m²"
+function convertUnitToSymbol(unitStr) {
+    // 1. 完全一致（短縮形など）
+    // if (UNIT_SPECIAL_MAP[unitStr]) {
+    //     return UNIT_SPECIAL_MAP[unitStr];
+    // }
+    
+    // 2. 基本単位のみ
+    if (UNIT_BASES[unitStr]) {
+        return UNIT_BASES[unitStr];
+    }
+
+    let currentStr = unitStr;
+    let symbol = "";
+    let suffix = "";
+
+    // 3. 平方・立方の処理 (m² 等)
+    for (const [modName, modSym] of Object.entries(UNIT_MODIFIERS)) {
+        if (currentStr.startsWith(modName)) {
+            suffix = modSym;
+            currentStr = currentStr.slice(modName.length);
+            break;
+        }
+    }
+
+    // 4. 接頭辞の処理 (k, M, c, m 等)
+    for (const [preName, preSym] of Object.entries(UNIT_PREFIXES)) {
+        if (currentStr.startsWith(preName)) {
+            symbol += preSym;
+            currentStr = currentStr.slice(preName.length);
+            break;
+        }
+    }
+
+    // 5. 残りの基本単位 (m, g, W 等)
+    if (UNIT_BASES[currentStr]) {
+        symbol += UNIT_BASES[currentStr];
+        return symbol + suffix;
+    }
+
+    // マッチしない場合は元の文字列を返す
+    return unitStr;
+}
+
 // テキスト内の漢数字参照を変換する関数
 function replaceKanjiReferences(text) {
     if (!text) return text;
 
-    // パターン定義
-    const regexStandard = /(第|同|の|^)([〇一二三四五六七八九十百千・]+)(条|項|号|編|章|節|款|目|ギガ|メガ|キロ|センチ|ミリ|平方|立方|メートル|グラム|トン|リットル|ニュートン|ジュール|ワット|パーセント|パスカル)?/g;
-    const regexMeter = /([〇一二三四五六七八九十百千・]+)(ギガ|メガ|キロ|センチ|ミリ|平方|立方|メートル|グラム|トン|リットル|ニュートン|ジュール|ワット|パーセント|パスカル)/g;
+    // 物理単位の正規表現（組み合わせマッチ用）
+    // (?:...)+ とすることで、"平方"+"キロ"+"メートル" のような連続を1つの塊としてキャプチャする
+    const regexPhysical = /([〇一二三四五六七八九十百千・]+)((?:ギガ|メガ|キロ|センチ|ミリ|平方|立方|メートル|グラム|トン|リットル|ニュートン|ジュール|ワット|パーセント|パスカル)+)/g;
 
-    // 1. 単位直結型（メートル等）を先に処理
-    let processedText = text.replace(regexMeter, (match, kanjiNum, unit) => {
+    // 法令単位の正規表現（物理単位は上記で処理するため除外）
+    const regexLegal = /(第|同|の|^)([〇一二三四五六七八九十百千・]+)(条|項|号|編|章|節|款|目)?/g;
+
+    // 1. 物理単位付きの数値を処理（数値変換 ＋ 単位記号化）
+    let processedText = text.replace(regexPhysical, (match, kanjiNum, unitStr) => {
         const number = parseKanjiNumber(kanjiNum);
-        return (number !== null) ? number + unit : match;
+        if (number === null) return match;
+        
+        const unitSymbol = convertUnitToSymbol(unitStr);
+        return number + unitSymbol;
     });
 
-    // 2. 標準的な法令番号/枝番を処理
-    processedText = processedText.replace(regexStandard, (match, prefix, kanjiNum, suffix, offset, string) => {
+    // 2. 法令番号/枝番を処理
+    processedText = processedText.replace(regexLegal, (match, prefix, kanjiNum, suffix, offset, string) => {
         const number = parseKanjiNumber(kanjiNum);
         if (number === null) return match;
 
-        // 条件A: 単位(suffix)がある場合 (例: 第五条 -> 第5条)
-        // -> 無条件で変換
+        // 条件A: 単位(suffix)がある場合 -> 無条件で変換
         if (suffix) {
             const p = (prefix === '^') ? '' : prefix;
             return p + number + suffix;
         }
 
-        // 条件B: 接頭辞が「の」の場合 (例: の二)
-        // -> 直前が「条・項」などの単位なら変換する (第1条の2)
-        // -> 直前が「漢数字」なら号の枝番とみなして変換しない (三の二 -> 三の二 のまま)
+        // 条件B: 接頭辞が「の」の場合
         if (prefix === 'の') {
-            // 直前の文字を確認
             if (offset > 0) {
                 const prevChar = string[offset - 1];
-                // 直前が漢数字の場合は、号(Item)の枝番と判断して変換をスキップ
+                // 直前が漢数字（号の可能性）なら変換しない
                 if (KANJI_SET.has(prevChar)) {
-                    return match;
+                    return match; 
                 }
             }
             return prefix + number;
         }
 
-        // それ以外（単位なし、接頭辞なし/その他）は変換しない
-        // これにより、行頭の「一　道路」などは漢数字のまま維持される
         return match;
     });
 
