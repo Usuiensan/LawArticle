@@ -6,7 +6,7 @@
   "content_scripts": [
     {
       "matches": ["*://*.e-gov.go.jp/*"],
-      "js": ["contentScript.js"],
+      "js": ["kanji.js", "contentScript.js"],
       "run_at": "document_idle"
     }
   ],
