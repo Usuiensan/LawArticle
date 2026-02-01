@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "e-govにある法律などの条文を算用数字に変換します",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "description": "法律の条文番号を算用数字に変換するChrome拡張機能です。例えば「第一条」は「第1条」のように自動で変換されます。",
   "content_scripts": [
     {
