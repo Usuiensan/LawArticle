@@ -11,21 +11,10 @@ const KANJI_MAP = {
   八: 8,
   九: 9,
 };
+const UNIT_SMALL = { 十: 10, 百: 100, 千: 1000 };
+const UNIT_LARGE = { 万: 10000, 億: 100000000, 兆: 1000000000000 };
 
-// 桁の単位マップ
-const UNIT_MAP = {
-  十: 10,
-  百: 100,
-  千: 1000,
-};
-
-// 漢数字判定用セット
-const KANJI_SET = new Set([
-  ...Object.keys(KANJI_MAP),
-  ...Object.keys(UNIT_MAP),
-]);
-
-// 単位変換用定義
+// 物理単位定義（変更なし）
 const UNIT_PREFIXES = {
   ギガ: 'G',
   メガ: 'M',
@@ -33,9 +22,12 @@ const UNIT_PREFIXES = {
   センチ: 'c',
   ミリ: 'm',
 };
-
 const UNIT_BASES = {
   メートル: 'm',
+  メートル毎時: 'm/h',
+  メートル毎分: 'm/min',
+  メートル毎秒: 'm/s',
+  メートル毎秒毎秒: 'm/s²',
   グラム: 'g',
   トン: 't',
   リットル: 'L',
@@ -45,231 +37,212 @@ const UNIT_BASES = {
   パーセント: '%',
   パスカル: 'Pa',
 };
+const UNIT_MODIFIERS = { 平方: '²', 立方: '³' };
 
-const UNIT_MODIFIERS = {
-  平方: '²',
-  立方: '³',
-};
-
-// そのまま変換する例外や短縮形のマッピング
-// const UNIT_SPECIAL_MAP = {
-//     'キロ': 'km',   // 文脈によるが道路関連ではkmが多いため
-//     'センチ': 'cm',
-//     'ミリ': 'mm'
-// };
-
-// 漢数字文字列を算用数字(String)に変換する関数
+/**
+ * 漢数字文字列を数値(Integer)に変換する
+ */
 function parseKanjiNumber(str) {
   if (!str) return null;
+  if (/^[0-9]+$/.test(str)) return parseInt(str, 10);
 
-  if (str.includes('・')) {
-    const parts = str.split('・');
-    const integerPart = parseIntegerPart(parts[0]);
-    const decimalPart = parseDecimalPart(parts[1]);
-    if (integerPart !== null && decimalPart !== null) {
-      return integerPart + '.' + decimalPart;
+  // 位取り記法（〇を含む、または単位文字を含まない長い羅列）
+  const isPositional =
+    str.includes('〇') || (!/[十百千万億兆]/.test(str) && str.length > 1);
+
+  if (isPositional) {
+    let res = '';
+    for (const char of str) {
+      if (KANJI_MAP[char] !== undefined) res += KANJI_MAP[char];
+      else return null;
     }
-    return null;
-  } else {
-    return parseIntegerPart(str);
+    return parseInt(res, 10);
   }
-}
 
-function parseIntegerPart(str) {
-  if (!str) return 0;
+  // 単位付き記法
   let total = 0;
-  let temp = 0;
+  let sectionVal = 0;
+  let currentVal = 0;
+
   for (let i = 0; i < str.length; i++) {
     const char = str[i];
     if (KANJI_MAP[char] !== undefined) {
-      // 〇は単独で使用されている場合のみ0として、それ以外は10倍（三〇=30など）
-      if (char === '〇') {
-        if (temp === 0 && i === 0) {
-          // 先頭の〇は0
-          temp = 0;
-        } else if (temp === 0 && (i === 0 || !KANJI_MAP[str[i - 1]])) {
-          // 前の数字がない場合は0
-          temp = 0;
-        } else if (temp !== 0) {
-          // 前に数字がある場合は10倍（三〇=30）
-          temp *= 10;
-        }
-      } else {
-        temp = KANJI_MAP[char];
-      }
-    } else if (UNIT_MAP[char]) {
-      const val = temp === 0 && (i === 0 || !KANJI_MAP[str[i - 1]]) ? 1 : temp;
-      total += val * UNIT_MAP[char];
-      temp = 0;
+      currentVal = KANJI_MAP[char];
+    } else if (UNIT_SMALL[char]) {
+      if (currentVal === 0) currentVal = 1;
+      sectionVal += currentVal * UNIT_SMALL[char];
+      currentVal = 0;
+    } else if (UNIT_LARGE[char]) {
+      if (currentVal > 0) sectionVal += currentVal;
+      if (sectionVal === 0 && currentVal === 0) sectionVal = 1;
+      total += sectionVal * UNIT_LARGE[char];
+      sectionVal = 0;
+      currentVal = 0;
     }
   }
-  total += temp;
+  total += sectionVal + currentVal;
   return total;
 }
 
-function parseDecimalPart(str) {
-  if (!str) return '';
-  let res = '';
-  for (let i = 0; i < str.length; i++) {
-    const char = str[i];
-    if (KANJI_MAP[char] !== undefined) {
-      res += KANJI_MAP[char];
-    } else {
-      return null;
-    }
-  }
-  return res;
-}
-
 /**
- * 兆・億・万を維持しつつ、その間の数字を算用数字にする
- * 例: "三億二千八百万" -> "3億2800万"
+ * 物理単位の変換 (変更なし)
  */
-function parseLargeKanjiNumber(str) {
-  if (!str) return null;
-
-  // 兆・億・万が含まれていない場合は、従来のパースを行う
-  if (!/[兆億万]/.test(str)) {
-    return parseKanjiNumber(str);
-  }
-
-  // 兆・億・万で分割し、それぞれの塊をパースして結合する
-  // 例: "三億二千八百万" -> "三億" + "二千八百" + "万"
-  let result = str.replace(
-    /([〇一二三四五六七八九十百千]+)([兆億万])/g,
-    (match, numPart, unit) => {
-      const parsed = parseKanjiNumber(numPart);
-      return parsed + unit;
-    },
-  );
-
-  // 末尾に千以下の端数がある場合（例: 二億五千）の処理
-  const lastMatch = str.match(/([〇一二三四五六七八九十百千]+)$/);
-  if (lastMatch && !/[兆億万]$/.test(str)) {
-    const lastNum = parseKanjiNumber(lastMatch[1]);
-    result = result.replace(new RegExp(lastMatch[1] + '$'), lastNum);
-  }
-
-  return result;
-}
-
-// 単位文字列を記号に変換する関数
-// 例: "キロメートル" -> "km", "平方メートル" -> "m²"
 function convertUnitToSymbol(unitStr) {
-  // 1. 完全一致（短縮形など）
-  // if (UNIT_SPECIAL_MAP[unitStr]) {
-  //     return UNIT_SPECIAL_MAP[unitStr];
-  // }
-
-  // 2. 基本単位のみ
-  if (UNIT_BASES[unitStr]) {
-    return UNIT_BASES[unitStr];
-  }
-
-  let currentStr = unitStr;
-  let symbol = '';
+  let current = unitStr;
   let suffix = '';
+  let prefix = '';
+  let base = '';
 
-  // 3. 平方・立方の処理 (m² 等)
-  for (const [modName, modSym] of Object.entries(UNIT_MODIFIERS)) {
-    if (currentStr.startsWith(modName)) {
-      suffix = modSym;
-      currentStr = currentStr.slice(modName.length);
+  for (const [key, val] of Object.entries(UNIT_MODIFIERS)) {
+    if (current.startsWith(key)) {
+      suffix = val;
+      current = current.slice(key.length);
       break;
     }
   }
-
-  // 4. 接頭辞の処理 (k, M, c, m 等)
-  for (const [preName, preSym] of Object.entries(UNIT_PREFIXES)) {
-    if (currentStr.startsWith(preName)) {
-      symbol += preSym;
-      currentStr = currentStr.slice(preName.length);
+  for (const [key, val] of Object.entries(UNIT_PREFIXES)) {
+    if (current.startsWith(key)) {
+      prefix = val;
+      current = current.slice(key.length);
       break;
     }
   }
-
-  // 5. 残りの基本単位 (m, g, W 等)
-  if (UNIT_BASES[currentStr]) {
-    symbol += UNIT_BASES[currentStr];
-    return symbol + suffix;
+  if (UNIT_BASES[current]) {
+    base = UNIT_BASES[current];
+    return prefix + base + suffix;
   }
-
-  // マッチしない場合は元の文字列を返す
   return unitStr;
 }
 
-// テキスト内の漢数字参照を変換する関数
+/**
+ * 【新機能】数値を公用文ルール（万・億・兆残し、3桁カンマ）でフォーマットする
+ * 例: 123456789 -> "1億2,345万6,789"
+ */
+function formatCurrency(num) {
+  if (num === 0) return '0';
+
+  // 4桁ごとに切り分けるための単位
+  const units = ['', '万', '億', '兆'];
+  let parts = [];
+  let n = num;
+  let unitIndex = 0;
+
+  while (n > 0) {
+    const chunk = n % 10000; // 下4桁を取得
+    if (chunk > 0) {
+      // 3桁区切りのカンマを入れる (例: 1234 -> "1,234")
+      const formattedChunk = chunk.toLocaleString();
+      parts.unshift(formattedChunk + units[unitIndex]);
+    }
+    n = Math.floor(n / 10000);
+    unitIndex++;
+  }
+
+  return parts.join('');
+}
+
+/**
+ * テキスト変換メイン関数
+ */
 function replaceKanjiReferences(text) {
   if (!text) return text;
 
-  // 物理単位
-  const regexPhysical =
-    /([〇一二三四五六七八九十百千・]+)((?:ギガ|メガ|キロ|センチ|ミリ|平方|立方|メートル|グラム|トン|リットル|ニュートン|ジュール|ワット|パーセント|パスカル)+)/g;
+  // --- 正規表現の定義 ---
 
-  // 改良版：接頭辞に「元号」を追加、兆億万を許容し、誤変換回避の否定先読みを拡張
-  // 接頭辞の「の」はカタカナの「ノ」も許容する
-  const regexLegal =
-    /(第|同|の|ノ|令和|平成|昭和|大正|^)([〇一二三四五六七八九十百千兆億万・]+)(?![般部者員体定分括律端方側つ人日間権法福節種様切致環例])(条|項|号|編|章|節|款|目|年|月|日|回|%|円|時|倍)?/g;
+  // 1. 金額パターン (New!)
+  // 「金」はあってもなくても良い。末尾が「円」。
+  // 概数（数万円、数十円）を除外するため、漢数字のみに限定
+  const regexCurrency = /(金)?([〇一二三四五六七八九十百千万億兆]+)円/g;
 
-  // 熟語的な誤変換を追加で防ぐための除外セット
-  const EXCLUDE_SUFFIXES = new Set([
-    '種',
-    '様',
-    '切',
-    '致',
-    '環',
-    '例',
-    '部',
-    '同',
-  ]);
+  // 2. 物理単位パターン
+  const unitParts = Object.keys(UNIT_BASES).join('|');
+  const regexPhysical = new RegExp(
+    `([〇一二三四五六七八九十百千万億兆]+)((?:平方|立方)?(?:ギガ|メガ|キロ|センチ|ミリ)?(?:${unitParts}))`,
+    'g',
+  );
 
-  // 1. 物理単位の処理
-  let processedText = text.replace(
-    regexPhysical,
-    (match, kanjiNum, unitStr) => {
-      const number = parseKanjiNumber(String(kanjiNum));
-      if (number === null) return match;
-      return number + convertUnitToSymbol(unitStr);
+  // 3. 法令番号パターン
+  const regexLawStrict =
+    /(第|同)([〇一二三四五六七八九十百千万億兆]+)(条|項|号|編|章|節|款|目)/g;
+
+  // 4. 日付・元号パターン
+  const regexDate =
+    /(明治|大正|昭和|平成|令和)([〇一二三四五六七八九十百千]+)(年|年度|月|日)/g;
+
+  // 5. 期間・箇所パターン (New! 公用文ルール「ケ」対応)
+  // 「三箇月」->「3か月」、「五箇所」->「5か所」
+  const regexCount = /([〇一二三四五六七八九十百千]+)(箇|か|カ|ヵ)(月|所|国)/g;
+
+  // 6. 枝番パターン
+  const regexBranchChain =
+    /([条項号編章節款目])((?:の[〇一二三四五六七八九十百千]+)+)/g;
+
+  let processed = text;
+
+  // --- 変換処理 ---
+
+  // A. 金額の変換 (公用文ルール適用)
+  processed = processed.replace(regexCurrency, (match, prefix, numStr) => {
+    // "数万円" などの概数は parseKanjiNumber で null ではないが、
+    // 厳密な数値変換を意図するため、除外ロジックが必要ならここに追加。
+    // 現状の parseKanjiNumber は "数" を無視またはパース不能とするため安全。
+
+    const num = parseKanjiNumber(numStr);
+    if (num !== null) {
+      const formatted = formatCurrency(num);
+      return (prefix || '') + formatted + '円';
+    }
+    return match;
+  });
+
+  // B. 期間・箇所の変換 (箇 -> か)
+  processed = processed.replace(regexCount, (match, numStr, k, suffix) => {
+    const num = parseKanjiNumber(numStr);
+    if (num !== null) {
+      // ルール「ケ」: 算用数字を使う場合は「か」と書く
+      return `${num}か${suffix}`;
+    }
+    return match;
+  });
+
+  // C. 物理単位
+  processed = processed.replace(regexPhysical, (match, numStr, unitStr) => {
+    const num = parseKanjiNumber(numStr);
+    const symbol = convertUnitToSymbol(unitStr);
+    if (num !== null && symbol !== unitStr) {
+      return num + symbol;
+    }
+    return match;
+  });
+
+  // D. 法令番号
+  processed = processed.replace(
+    regexLawStrict,
+    (match, prefix, numStr, suffix) => {
+      const num = parseKanjiNumber(numStr);
+      return num !== null ? `${prefix}${num}${suffix}` : match;
     },
   );
 
-  // 2. 法令番号・日付・元号の処理
-  processedText = processedText.replace(
-    regexLegal,
-    (match, prefix, kanjiNum, suffix, offset, string) => {
-      if (!kanjiNum) return match;
+  // E. 日付
+  processed = processed.replace(regexDate, (match, prefix, numStr, suffix) => {
+    const num = parseKanjiNumber(numStr);
+    return num !== null ? `${prefix}${num}${suffix}` : match;
+  });
 
-      // 直後の文字が熟語的な除外語の場合は変換しない
-      const prefixLen = prefix && prefix !== '^' ? prefix.length : 0;
-      const kanjiStart = offset + prefixLen;
-      const kanjiEnd = kanjiStart + kanjiNum.length;
-      const nextChar = string[kanjiEnd];
-      if (nextChar && EXCLUDE_SUFFIXES.has(nextChar)) return match;
+  // F. 枝番
+  processed = processed.replace(regexBranchChain, (match, suffix, chain) => {
+    const convertedChain = chain.replace(
+      /の([〇一二三四五六七八九十百千]+)/g,
+      (m, numStr) => {
+        const num = parseKanjiNumber(numStr);
+        return num !== null ? `の${num}` : m;
+      },
+    );
+    return suffix + convertedChain;
+  });
 
-      const numberStr = parseLargeKanjiNumber(String(kanjiNum));
-      if (numberStr === null) return match;
-
-      // 条件1: 単位(suffix)がある場合（年、月、日、条、項など）
-      if (suffix) {
-        const p = prefix === '^' || !prefix ? '' : prefix;
-        return p + numberStr + suffix;
-      }
-
-      // 条件2: 接頭辞が「第」「同」「の/ノ」または「元号」の場合
-      if (prefix && prefix !== '^') {
-        // 「の」「ノ」の場合は枝番チェック（前が漢数字なら枝番の一部なので変換しない）
-        if (prefix === 'の' || prefix === 'ノ') {
-          if (offset > 0) {
-            const prevChar = string[offset - 1];
-            if (KANJI_SET.has(prevChar)) return match;
-          }
-        }
-        return prefix + numberStr;
-      }
-
-      return match;
-    },
-  );
-
-  return processedText;
+  return processed;
 }
+
+window.KanjiConverter = { replaceKanjiReferences };

@@ -1,84 +1,78 @@
-// kanji.js で定義した replaceKanjiReferences(text) 関数を利用する
+(function () {
+  // 変換処理本体
+  function convertNode(textNode) {
+    // すでに処理済み、または空の場合はスキップ
+    const originalText = textNode.nodeValue;
+    if (!originalText || !originalText.trim()) return;
 
-function convertPageText(rootNode) {
-    const selectors = 'p, li, div:not(.sidebar):not(.header), span, h1, h2, h3, h4';
-    
-    let elements;
-    if (rootNode.nodeType === Node.TEXT_NODE) {
-        elements = [rootNode.parentElement];
-    } else {
-        elements = rootNode.querySelectorAll(selectors);
-        if (rootNode.matches && rootNode.matches(selectors)) {
-            elements = [rootNode, ...elements];
-        }
+    // 親要素が script や style の場合はスキップ
+    const parent = textNode.parentElement;
+    if (parent && (parent.tagName === 'SCRIPT' || parent.tagName === 'STYLE'))
+      return;
+
+    // KanjiConverter は kanji.js で window オブジェクト等に紐付けられている前提
+    // もしくは同じスコープに結合されるならそのまま関数呼び出し
+    const convertedText = window.KanjiConverter
+      ? window.KanjiConverter.replaceKanjiReferences(originalText)
+      : replaceKanjiReferences(originalText); // 直接結合されている場合
+
+    if (convertedText !== originalText) {
+      textNode.nodeValue = convertedText;
     }
-    
-    const processedNodes = new Set();
-    
-    for (const element of elements) {
-        if (!element || processedNodes.has(element)) {
-            continue;
-        }
-        
-        const walker = document.createTreeWalker(
-            element,
-            NodeFilter.SHOW_TEXT,
-            null,
-            false
-        );
+  }
 
-        let node;
-        while (node = walker.nextNode()) {
-            const originalText = node.nodeValue;
-            
-            if (!originalText || originalText.trim() === '' || node.parentElement.closest('script, style')) {
-                continue;
-            }
-            
-            // 【修正点】文章全体を解析して、該当箇所だけ置換する関数を呼ぶ
-            // （以前はここで parse 関数を呼んでしまい、戻り値が空文字になっていた）
-            const convertedText = replaceKanjiReferences(originalText);
-            
-            if (originalText !== convertedText) {
-                node.nodeValue = convertedText;
-            }
-        }
-        
-        processedNodes.add(element);
+  // ページ全体を走査する関数
+  function walkAndConvert(root) {
+    const walker = document.createTreeWalker(
+      root,
+      NodeFilter.SHOW_TEXT,
+      null,
+      false,
+    );
+
+    let node;
+    while ((node = walker.nextNode())) {
+      convertNode(node);
     }
-}
+  }
 
-function startMutationObserver() {
-    const config = { 
-        childList: true,
-        subtree: true,
-        characterData: true
-    };
-
-    const callback = (mutationsList, observer) => {
-        for (const mutation of mutationsList) {
-            if (mutation.type === 'childList') {
-                mutation.addedNodes.forEach(node => {
-                    if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE) {
-                        convertPageText(node);
-                    }
-                });
-            } else if (mutation.type === 'characterData') {
-                if (mutation.target.nodeType === Node.TEXT_NODE) {
-                    convertPageText(mutation.target);
-                }
+  // MutationObserverの設定
+  function startObserver() {
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type === 'childList') {
+          mutation.addedNodes.forEach((node) => {
+            // 要素ノードならその中身を走査
+            if (node.nodeType === Node.ELEMENT_NODE) {
+              walkAndConvert(node);
             }
+            // テキストノードが直接追加された場合
+            else if (node.nodeType === Node.TEXT_NODE) {
+              convertNode(node);
+            }
+          });
+        } else if (mutation.type === 'characterData') {
+          // テキストが書き換わった場合
+          convertNode(mutation.target);
         }
-    };
+      }
+    });
 
-    const observer = new MutationObserver(callback);
-    observer.observe(document.body, config);
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true, // テキストの変更も監視
+    });
+  }
 
-    convertPageText(document.body);
-}
-
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', startMutationObserver);
-} else {
-    startMutationObserver();
-}
+  // 初期化処理
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      walkAndConvert(document.body);
+      startObserver();
+    });
+  } else {
+    walkAndConvert(document.body);
+    startObserver();
+  }
+})();
